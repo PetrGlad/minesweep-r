@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-use ansi_escapes::{ClearScreen, CursorHide, CursorShow, CursorTo};
+use ansi_escapes::{ClearScreen, CursorHide, CursorShow, CursorTo, CursorMove};
 use ansi_term::Colour;
 use rand::prelude::ThreadRng;
 use rand::Rng;
@@ -40,31 +40,26 @@ fn new_rnd_board(rng: &mut ThreadRng,
 }
 
 fn print_board(board: &Board) {
-    println!("Mines {:?}", board);
     print!("{}{}{}", CursorHide, ClearScreen, CursorTo::TopLeft);
-
     let mut ci = board.cells.iter();
     let mut cell = ci.next().unwrap();
-    'rows: for row in board.ranges.0.clone() {
-        for col in board.ranges.1.clone() {
-            if cell <= &Cell(row, col) {
-                print!("{} ", Colour::Red.paint("*"));
-                // println!("\n>>> {:?} <> {:?}", cell, &Cell(row, col));
-                let o_cell = ci.next();
-                if o_cell.is_some() {
-                    cell = o_cell.unwrap();
-                } else {
-                    break 'rows;
-                }
-            } else {
-                print!("  ");
+    for row in board.ranges.0.clone() {
+        let mut col = 0;
+        while cell.0 <= row {
+             print!("{}{}",
+                   CursorMove::X((cell.1 - col) as i16 * 2),
+                   Colour::Red.paint("*"));
+            let o_cell = ci.next();
+            if o_cell.is_none() {
+                break;
             }
+            col = cell.1;
+            cell = o_cell.unwrap();
         }
         println!();
     }
-    println!("{}{}",
-             CursorTo::AbsoluteXY(board.ranges.0.len() as u16, 0),
-             CursorShow);
+    println!("{}", CursorShow);
+    // println!("Mines {:?}", board); // DEBUG
 }
 
 fn main() {
@@ -75,6 +70,6 @@ fn main() {
 
     let board_rows = 0..16;
     let board_cols = 0..16;
-    let mines: Board = new_rnd_board(&mut rng, &board_rows, &board_cols, 12);
+    let mines: Board = new_rnd_board(&mut rng, &board_rows, &board_cols, 30);
     print_board(&mines);
 }
