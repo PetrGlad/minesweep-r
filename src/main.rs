@@ -41,19 +41,30 @@ fn new_rnd_board(rng: &mut ThreadRng,
 
 fn print_board(board: &Board) {
     println!("Mines {:?}", board);
-
     print!("{}{}{}", CursorHide, ClearScreen, CursorTo::TopLeft);
-    for _r in board.ranges.0.clone() {
-        println!("{}", " ".repeat(board.ranges.1.len()));
-    }
-    for cell in &board.cells {
-        print!("{}{} ",
-               CursorTo::AbsoluteXY(cell.0, cell.1 * 2),
-               Colour::Red.paint("*"));
+
+    let mut ci = board.cells.iter();
+    let mut cell = ci.next().unwrap();
+    'rows: for row in board.ranges.0.clone() {
+        for col in board.ranges.1.clone() {
+            if cell <= &Cell(row, col) {
+                print!("{} ", Colour::Red.paint("*"));
+                // println!("\n>>> {:?} <> {:?}", cell, &Cell(row, col));
+                let o_cell = ci.next();
+                if o_cell.is_some() {
+                    cell = o_cell.unwrap();
+                } else {
+                    break 'rows;
+                }
+            } else {
+                print!("  ");
+            }
+        }
+        println!();
     }
     println!("{}{}",
-           CursorTo::AbsoluteXY(board.ranges.0.len() as u16, 0),
-           CursorShow);
+             CursorTo::AbsoluteXY(board.ranges.0.len() as u16, 0),
+             CursorShow);
 }
 
 fn main() {
