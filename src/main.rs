@@ -1,4 +1,5 @@
 use std::ops::Range;
+use std::collections::BTreeSet;
 
 use ansi_escapes::{ClearScreen, CursorHide, CursorShow, CursorTo, CursorMove};
 use ansi_term::Colour;
@@ -27,15 +28,19 @@ fn new_rnd_cell(rng: &mut ThreadRng, x_range: &Range<Coord>, y_range: &Range<Coo
 
 fn new_rnd_board(rng: &mut ThreadRng,
                  rows: &Range<Coord>, cols: &Range<Coord>,
-                 count: u16) -> Board {
-    let mut cells = vec![];
-    for _n in 0..count {
-        cells.push(new_rnd_cell(rng, &cols, &rows));
+                 count: usize) -> Board {
+    assert!(count < (rows.len() * cols.len()));
+    /* Note the following would be slow for dense fields due to duplicates.
+       Need a different algo for that case. E.g. randomly selecting
+       from list of all (x,y) pairs.
+     */
+    let mut cells = BTreeSet::new();
+    while cells.len() < count {
+        cells.insert(new_rnd_cell(rng, &cols, &rows));
     }
-    cells.sort();
     return Board {
         ranges: (rows.clone(), cols.clone()),
-        cells,
+        cells: cells.into_iter().collect(),
     };
 }
 
@@ -59,7 +64,7 @@ fn print_board(board: &Board) {
         println!();
     }
     println!("{}", CursorShow);
-    // println!("Mines {:?}", board); // DEBUG
+    println!("Mines {:?}", board); // DEBUG
 }
 
 fn main() {
@@ -70,6 +75,6 @@ fn main() {
 
     let board_rows = 0..16;
     let board_cols = 0..16;
-    let mines: Board = new_rnd_board(&mut rng, &board_rows, &board_cols, 30);
+    let mines: Board = new_rnd_board(&mut rng, &board_rows, &board_cols, 100);
     print_board(&mines);
 }
