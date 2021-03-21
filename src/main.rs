@@ -9,10 +9,6 @@ use rand::Rng;
 
 type Coord = u8;
 
-#[derive(Debug)]
-#[derive(PartialEq, Eq, PartialOrd, Ord)]
-struct Cell(Coord, Coord);
-
 type Danger = u8;
 
 const DANGER_NONE: Danger = 0;
@@ -115,10 +111,6 @@ impl Paint for Board {
 
 fn main() {
     let mut rng = rand::thread_rng();
-    assert_eq!(Cell(1, 3), Cell(1, 3));
-    assert!(Cell(1, 3) < Cell(2, 3));
-    assert!(Cell(1, 2) < Cell(1, 3));
-
     let board_rows = 0..15;
     let board_cols = 0..15;
 
