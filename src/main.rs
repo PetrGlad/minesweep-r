@@ -31,13 +31,13 @@ impl Field {
     fn random_new(rng: &mut ThreadRng,
                   rows: &Range<Coord>,
                   cols: &Range<Coord>,
-                  frac: f32) -> Field {
-        assert!(0.0 <= frac && frac <= 1.0);
+                  fill_frac: f32) -> Field {
+        assert!(0.0 <= fill_frac && fill_frac <= 1.0);
         let mut cells = Vec::with_capacity(rows.len());
         for _r in rows.start..rows.end {
             let mut row = Vec::with_capacity(cols.len());
             for _c in cols.start..cols.end {
-                row.push(if rng.gen::<f32>() < frac { DANGER_MINE } else { DANGER_NONE });
+                row.push(if rng.gen::<f32>() < fill_frac { DANGER_MINE } else { DANGER_NONE });
             }
             cells.push(row);
         }
