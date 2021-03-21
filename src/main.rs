@@ -1,4 +1,3 @@
-use ndarray::prelude::*;
 use ndarray::{Array, Ix2};
 use std::ops::Range;
 use std::fmt;
@@ -32,6 +31,14 @@ const NEIGH: [(i8, i8); 8] = [
     (1, -1), (1, 0), (1, 1)
 ];
 
+const MARGIN: usize = 1;
+
+/// Get index ranges that may contain mines
+fn active_ranges(shape: &[usize]) -> (Range<usize>, Range<usize>) {
+    (MARGIN..(shape[0] - MARGIN),
+     MARGIN..(shape[1] - MARGIN))
+}
+
 impl Field {
     fn random_new(rng: &mut ThreadRng,
                   n_rows: usize,
@@ -39,8 +46,9 @@ impl Field {
                   fill_frac: f32) -> Field {
         assert!(0.0 <= fill_frac && fill_frac <= 1.0);
         let mut cells = Array::from_elem(Ix2(n_rows, n_cols), DANGER_NONE);
-        for i in 0..cells.shape()[0] {
-            for j in 0..cells.shape()[1] {
+        let (rows, cols) = active_ranges(cells.shape());
+        for i in rows {
+            for j in cols.clone() {
                 let idx = [i, j];
                 cells[idx] = if rng.gen::<f32>() < fill_frac { DANGER_MINE } else { DANGER_NONE };
             }
@@ -51,8 +59,7 @@ impl Field {
     }
 
     fn fill_hints(&mut self) {
-        let rows = 0..self.cells.shape()[0];
-        let cols = 0..self.cells.shape()[1];
+        let (rows, cols) = active_ranges(self.cells.shape());
         for i in rows.clone() {
             for j in cols.clone() {
                 if is_mine(self.cells[(i, j)]) {
@@ -60,11 +67,7 @@ impl Field {
                         let neigh_i = i as i32 + k.0 as i32;
                         let neigh_j = j as i32 + k.1 as i32;
                         if neigh_i >= 0 && neigh_j >= 0 {
-                            let ni = neigh_i as usize;
-                            let nj = neigh_j as usize;
-                            if rows.contains(&ni) && cols.contains(&nj) {
-                                self.cells[(ni, nj)] += 1
-                            }
+                            self.cells[(neigh_i as usize, neigh_j as usize)] += 1
                         }
                     }
                 }
@@ -91,9 +94,8 @@ struct Board {
 
 impl Board {
     fn new(n_rows: Coord, n_cols: Coord) -> Board {
-        let mut cells = Array::from_elem(Ix2(n_rows, n_cols), CellState::Unknown);
         Board {
-            cells
+            cells: Array::from_elem(Ix2(n_rows, n_cols), CellState::Unknown)
         }
     }
 }
@@ -136,8 +138,8 @@ impl fmt::Display for Board {
 
 fn main() {
     let mut rng = rand::thread_rng();
-    let n_rows = 15;
-    let n_cols = 80;
+    let n_rows: usize = 20;
+    let n_cols: usize = 80;
 
     let mut mines: Field = Field::random_new(&mut rng, n_rows, n_cols, 0.12);
     Field::fill_hints(&mut mines);
@@ -154,4 +156,23 @@ fn main() {
     // println!("Board {:?}", &board);
 
     println!("{}", CursorShow);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cmp;
+
+    #[test]
+    fn test_neigh_values() {
+        assert!(NEIGH
+            .iter()
+            .map(|(r, c)| cmp::max(r, c))
+            .max()
+            .unwrap() <= &(MARGIN as i8));
+        assert!(NEIGH.iter()
+            .map(|(r, c)| cmp::min(r, c))
+            .min()
+            .unwrap() >= &-(MARGIN as i8));
+    }
 }
