@@ -66,9 +66,7 @@ impl Field {
                     for k in &NEIGH {
                         let neigh_i = i as i32 + k.0 as i32;
                         let neigh_j = j as i32 + k.1 as i32;
-                        if neigh_i >= 0 && neigh_j >= 0 {
-                            self.cells[(neigh_i as usize, neigh_j as usize)] += 1
-                        }
+                        self.cells[(neigh_i as usize, neigh_j as usize)] += 1
                     }
                 }
             }
