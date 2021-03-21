@@ -26,6 +26,12 @@ struct Field {
     cells: Array<Danger, Ix2>
 }
 
+const NEIGH: [(i8, i8); 8] = [
+    (-1, -1), (-1, 0), (-1, 1),
+    (0, -1), /*     */ (0, 1),
+    (1, -1), (1, 0), (1, 1)
+];
+
 impl Field {
     fn random_new(rng: &mut ThreadRng,
                   n_rows: usize,
@@ -45,11 +51,22 @@ impl Field {
     }
 
     fn fill_hints(&mut self) {
-        for i in 0..self.cells.shape()[0] {
-            for j in 0..self.cells.shape()[1] {
-                let idx = [i, j];
-                if is_mine(self.cells[idx]) {
-                    // TODO Implement: +1 to neighbour cells
+        let rows = 0..self.cells.shape()[0];
+        let cols = 0..self.cells.shape()[1];
+        for i in rows.clone() {
+            for j in cols.clone() {
+                if is_mine(self.cells[(i, j)]) {
+                    for k in &NEIGH {
+                        let neigh_i = i as i32 + k.0 as i32;
+                        let neigh_j = j as i32 + k.1 as i32;
+                        if neigh_i >= 0 && neigh_j >= 0 {
+                            let ni = neigh_i as usize;
+                            let nj = neigh_j as usize;
+                            if rows.contains(&ni) && cols.contains(&nj) {
+                                self.cells[(ni, nj)] += 1
+                            }
+                        }
+                    }
                 }
             }
         }
