@@ -22,7 +22,8 @@ fn is_mine(x: Danger) -> bool {
 
 #[derive(Debug)]
 struct Field {
-    cells: Array<Danger, Ix2>
+    cells: Array<Danger, Ix2>,
+    n_mines: usize,
 }
 
 const NEIGH: [(i8, i8); 8] = [
@@ -47,14 +48,18 @@ impl Field {
         assert!(0.0 <= fill_frac && fill_frac <= 1.0);
         let mut cells = Array::from_elem(Ix2(n_rows, n_cols), DANGER_NONE);
         let (rows, cols) = active_ranges(cells.shape());
+        let mut n_mines = 0;
         for i in rows {
             for j in cols.clone() {
                 let idx = [i, j];
-                cells[idx] = if rng.gen::<f32>() < fill_frac { DANGER_MINE } else { DANGER_NONE };
+                let mine_here = rng.gen::<f32>() < fill_frac;
+                cells[idx] = if mine_here { DANGER_MINE } else { DANGER_NONE };
+                n_mines += 1;
             }
         }
         return Field {
-            cells
+            cells,
+            n_mines,
         };
     }
 
@@ -99,7 +104,7 @@ impl Board {
 }
 
 impl fmt::Display for Field {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         for row in self.cells.outer_iter() {
             for cell in row {
                 if is_mine(*cell) {
@@ -118,7 +123,7 @@ impl fmt::Display for Field {
 
 // TODO Unify print code with Field.
 impl fmt::Display for Board {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         for row in self.cells.outer_iter() {
             for cell in row {
                 write!(f, "{} ",
@@ -143,17 +148,46 @@ fn main() {
     Field::fill_hints(&mut mines);
     // TODO Make mines read-only now?
 
-    let board: Board = Board::new(n_rows, n_cols);
+    let mut board: Board = Board::new(n_rows, n_cols);
 
-    print!("{}{}{}", CursorHide, ClearScreen, CursorTo::TopLeft);
+    let mut scratchpad : Array<i8, Ix2> = Array::from_elem(Ix2(n_rows, n_cols), -1);
+    let mut probe_here = (0, 0); // TEMPORARY ALGORITHM STUB
+    let mut mines_remaining = mines.n_mines;
 
-    println!("{}", &mines);
-    // println!("Mines {:?}", &mines);
-    println!("\n");
-    println!("{}", &board);
-    // println!("Board {:?}", &board);
+    loop {
+        print!("{}{}{}", CursorHide, ClearScreen, CursorTo::TopLeft);
 
-    println!("{}", CursorShow);
+        println!("{}", &mines);
+        // println!("Mines {:?}", &mines);
+        println!("\n-------");
+        println!("{}", &board);
+        // println!("Board {:?}", &board);
+
+        println!("{}", CursorShow);
+
+        if mines_remaining == 0 {
+            println!("Complete.");
+            break;
+        }
+
+        let danger = mines.cells[probe_here]; // TEMPORARY ALGORITHM STUB
+        if danger >= DANGER_MINE {
+            println!("Failed. Probe at {:?}", probe_here);
+            break;
+        }
+        scratchpad[probe_here] = danger as i8;
+        board.cells[probe_here] = CellState::Free;
+        // TEMPORARY ALGORITHM STUB
+        if probe_here.1 == n_cols - 1 {
+            if probe_here.0 == n_rows - 1 {
+                println!("[STUB] DONE PROBING (should have terminated already).");
+                break;
+            }
+            probe_here = (probe_here.0 + 1, 0)
+        } else {
+            probe_here = (probe_here.0, probe_here.1 + 1)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -161,16 +195,17 @@ mod tests {
     use super::*;
     use std::cmp;
 
+    fn fit_margin(neigh: &[(i8, i8); 8]) -> usize {
+        // Margin should be enough to fit all neighbours.
+        neigh
+            .iter()
+            .map(|(r, c)| cmp::max(cmp::max(r, c), &cmp::min(*r, *c).abs()).to_owned())
+            .max()
+            .unwrap() as usize
+    }
+
     #[test]
     fn test_neigh_values() {
-        assert!(NEIGH
-            .iter()
-            .map(|(r, c)| cmp::max(r, c))
-            .max()
-            .unwrap() <= &(MARGIN as i8));
-        assert!(NEIGH.iter()
-            .map(|(r, c)| cmp::min(r, c))
-            .min()
-            .unwrap() >= &-(MARGIN as i8));
+        assert!(fit_margin(&NEIGH) <= MARGIN);
     }
 }
