@@ -30,12 +30,14 @@ struct Field {
     n_mines: usize,
 }
 
+/// Neighbouring cells' offsets.
 const NEIGH: [(i8, i8); 8] = [
     (-1, -1), (-1, 0), (-1, 1),
     (0, -1), /*     */ (0, 1),
     (1, -1), (1, 0), (1, 1)
 ];
 
+/// NEIGH with center cell included.
 const PATCH: [(i8, i8); 9] = [
     (-1, -1), (-1, 0), (-1, 1),
     (0, -1), (0, 0), (0, 1),
@@ -43,7 +45,7 @@ const PATCH: [(i8, i8); 9] = [
 ];
 
 
-/// Adds padding at the field sides to avoid checking edge conditions every time
+/// Adds padding at the field sides to avoid checking edge conditions every time.
 const MARGIN: usize = 1;
 
 /// Get index ranges that may contain mines
@@ -76,7 +78,6 @@ impl Field {
     }
 
     fn probe(&self, pos: (usize, usize)) -> u8 {
-        // let (rows, cols) = active_ranges(self.cells.shape());
         let mut count = 0;
         for p in &NEIGH {
             let neigh_i = offset(pos.0, p.0);
@@ -129,7 +130,7 @@ impl Board {
     }
 }
 
-// TODO Unify print code with Field.
+// TODO (refactoring) Unify print code with Field.
 impl fmt::Display for Board {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         for row in self.cells.outer_iter() {
@@ -158,8 +159,8 @@ enum CellDesc {
 }
 
 fn max(xs: [f32; NEIGH.len()]) -> f32 {
-    // No Ord for f32 so default max won't work
-    // Our p values are never Inf or NaN
+    /* No Ord for f32 so default max won't work.
+       Our p values are never Inf or NaN and array is not empty. */
     let mut result = xs[0];
     for x in &xs {
         if *x > result {
@@ -234,12 +235,13 @@ fn main() {
             }
 
             /* TODO Need some deque+priority queue (or maybe 2 priority queues with opposite ordering).
+               Consider https://lib.rs/crates/priority-queue
                Doing O(N) scan for now. */
             for pos in &edge {
                 let cell_desc = &scratchpad[*pos];
-                assert!(match cell_desc { // Can be lifted for Unknonws with a better implementation.
+                assert!(match cell_desc {
                     CellDesc::Estimate(_) => true,
-                    _ => false
+                    _ => false // Can be lifted for Unknonws with a better implementation.
                 }, "Only estimates should be on the edge.");
                 let danger = cell_desc.danger();
                 todo!();
