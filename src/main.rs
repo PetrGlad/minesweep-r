@@ -10,6 +10,7 @@ use rand::prelude::ThreadRng;
 use rand::Rng;
 
 type Coord = usize;
+type Pos = (Coord, Coord);
 
 type Danger = u8;
 
@@ -17,7 +18,6 @@ fn offset(x: usize, diff: i8) -> usize {
     (x as i32 + diff as i32) as usize
 }
 
-const DANGER_NONE: Danger = 0;
 const DANGER_MINE: Danger = 10;
 
 fn is_mine(x: Danger) -> bool {
@@ -151,9 +151,34 @@ impl fmt::Display for Board {
 #[derive(Clone)]
 enum CellDesc {
     Unknown,
-    Estimate(f32),
+    // TODO Actually we can have only 44 distinct ratios, no need in full float functionality.
+    Estimate([f32; NEIGH.len()]),
     Free(u8),
     Mine,
+}
+
+fn max(xs: [f32; NEIGH.len()]) -> f32 {
+    // No Ord for f32 so default max won't work
+    // Our p values are never Inf or NaN
+    let mut result = xs[0];
+    for x in &xs {
+        if *x > result {
+            result = *x;
+        }
+    }
+    result
+}
+
+impl CellDesc {
+    fn danger(self: &CellDesc) -> f32 {
+        match self {
+            CellDesc::Mine => 1f32,
+            CellDesc::Estimate(ps) => max(*ps),
+            CellDesc::Free(_) => 0f32,
+            // Unknown can actually be estimated given total unknown count and remaining mines count.
+            CellDesc::Unknown => panic!("Unreachable"),
+        }
+    }
 }
 
 fn main() {
@@ -164,14 +189,12 @@ fn main() {
     assert!(n_cols >= MARGIN);
 
     let mines: Field = Field::random_new(&mut rng, n_rows, n_cols, 0.12);
-
-
     let mut board: Board = Board::new(n_rows, n_cols);
 
     let mut scratchpad: Array<CellDesc, Ix2> = Array::from_elem(Ix2(n_rows, n_cols), CellDesc::Unknown);
-    let mut edge = Vec::with_capacity(100);
     let mut probe_here = (MARGIN, MARGIN); // TEMPORARY ALGORITHM STUB
     let mut mines_remaining = mines.n_mines;
+    let mut edge: Vec<Pos> = Vec::with_capacity(200);
 
     loop {
         print!("{}{}{}", CursorHide, ClearScreen, CursorTo::TopLeft);
@@ -190,111 +213,92 @@ fn main() {
         }
 
         let danger = mines.probe(probe_here);
-        if danger >= DANGER_MINE {
+        if is_mine(danger) {
             println!("Failed. Probe at {:?}", probe_here);
             break;
         }
         board.cells[probe_here] = CellState::Free;
         {
-            let mut neigh_mines = 0;
-            for neigh_d in &NEIGH {
-                let neigh_pos = (offset(probe_here.0, neigh_d.0), offset(probe_here.1, neigh_d.1));
-                match scratchpad[neigh_pos] {
-                    CellDesc::Mine => neigh_mines += 1,
-                    _ => ()
-                }
-            }
-            scratchpad[probe_here] = CellDesc::Free(danger - neigh_mines);
+            scratchpad[probe_here] = CellDesc::Free(danger);
 
-            /* Now that we cleared a place update estimates on all it's neighbours.
-               Since known mines are already excluded from danger scores,
-               estimate is set to danger score evenly distributed over neigbour unknowns. */
             /* In a GPU-like environment we could recalculate every estimate on the board every time.
                On a CPU one perhaps should be selective but it gets complicated.
                A compromise could be to update whole edge every time. */
-            for cell_d in &PATCH {
-                let cell_pos = (offset(probe_here.0, cell_d.0), offset(probe_here.1, cell_d.1));
-                let mut unknowns: Vec<(usize, usize)> = Vec::with_capacity(NEIGH.len());
-                for neigh_d in &NEIGH {
-                    let neigh_pos = (offset(cell_pos.0, neigh_d.0), offset(cell_pos.1, neigh_d.1));
-                    match scratchpad[neigh_pos] {
-                        CellDesc::Unknown | CellDesc::Estimate(_) => unknowns.push(neigh_pos),
-                        _ => ()
-                    }
-                }
-                if !unknowns.is_empty() {
-                    let p = danger as f32 / unknowns.len() as f32;
-                    for neigh_pos in &unknowns {
-                        let c = &mut scratchpad[*neigh_pos];
-                        match *c {
-                            CellDesc::Unknown => {
-                                *c = CellDesc::Estimate(p);
-                                edge.push(neigh_pos);
-                            },
-                            /* Note that we're updating after a new empty cell was encountered.
-                               This means the estimated probability can only increase. */
-
-                            /* TODO Simplification: Keep a list of all contributing probabilities?
-                                So we can update it bot on clear and mine mark. */
-
-                            CellDesc::Estimate(pre_p) if pre_p < p =>
-                                *c = CellDesc::Estimate(p),
-                            _ => ()
-                        }
-                    }
-                }
-            }
-            /* First mark known mines to see which danger is still real in later probing. */
-            // (Probably better start from tail of the edge instead)
-            for c in edge {
-                match scratchpad[c] {
-                    CellDesc::Estimate(p) if p == 1f32 => {
-                        board[c] = CellState::Marked;
-                        scratchpad[c] = CellDesc::Mine;
-                        for neigh_d in &NEIGH {
-                            let neigh_pos = (offset(c.0, neigh_d.0), offset(c.1, neigh_d.1));
-                            match scratchpad[neigh_pos] {
-                                CellDesc::Free(n) =>
-                                    /* TODO Now we need to update neighbour estimates but do
-                                        not want to copy/paste the above monstrosity.
-                                        Also this position should be excluded from the edge (would be O(N) :( ). */
-                                    scratchpad[neig_pos] = CellDesc::Free(n - 1),
-                                _ => ()
-                            }
-                        }
-                    }
+            for neigh_d in &PATCH {
+                let cell_pos = (offset(probe_here.0, neigh_d.0), offset(probe_here.1, neigh_d.1));
+                match scratchpad[cell_pos] {
+                    CellDesc::Free(danger) =>
+                        edge.append(&mut update_estimates(&mut scratchpad, &cell_pos, danger)),
                     _ => ()
                 }
             }
-            /* Find something to probe next starting from safe cells.
-               Pick ones on the edge with 0 probability first, if there are none 0s
-               then pick one of the places with lowest estimated probability.
-               */
-            /* A further improvement may be to pick an unexplored position not on
-               the edge if estimated probability there is lower than on the edge.
-               Need to know (or have a good estimate of) total number of mines tor that. */
-            // for c in edge {
-            //     match scratchpad[c] {
-            //         CellDesc::Estimate(p) if p == 1f32 => {
-            //             probe_here = c;
-            //             break;
-            //         }
-            //     }
-            // }
-            // TODO check if we have a new place to probe here / check finish conditions
+
+            /* TODO Need some deque+priority queue (or maybe 2 priority queues with opposite ordering).
+               Doing O(N) scan for now. */
+            for pos in &edge {
+                let cell_desc = &scratchpad[*pos];
+                assert!(match cell_desc { // Can be lifted for Unknonws with a better implementation.
+                    CellDesc::Estimate(_) => true,
+                    _ => false
+                }, "Only estimates should be on the edge.");
+                let danger = cell_desc.danger();
+                todo!();
+                /* TODO Mark known mines (cell.danger() == 1f32 on the edge),
+                   exclude the picks from edge, decrement mines_remaining */
+                /* TODO Pick next probe position (prefer lowest cell.danger() on the edge),
+                   exclude the pick from edge */
+            }
         }
 
         // TEMPORARY ALGORITHM STUB
         if probe_here.1 == n_cols - MARGIN - 1 {
             if probe_here.0 == n_rows - MARGIN - 1 {
-                println!("[STUB] DONE PROBING (should have terminated already).");
-                break;
+                panic!("[STUB] DONE PROBING (the scan should have been terminated already).");
             }
             probe_here = (probe_here.0 + 1, MARGIN)
         } else {
             probe_here = (probe_here.0, probe_here.1 + 1)
         }
     }
+}
+
+fn update_estimates(scratchpad: &mut Array<CellDesc, Ix2>, at: &Pos, danger: u8) -> Vec<Pos> {
+    let mut n_mines = 0;
+    let mut n_unknowns = 0;
+    for neigh_d in &NEIGH {
+        // TODO (refactoring) Extract this pattern.
+        let neigh_pos = (offset(at.0, neigh_d.0), offset(at.1, neigh_d.1));
+        match scratchpad[neigh_pos] {
+            CellDesc::Unknown | CellDesc::Estimate(_) => n_unknowns += 1,
+            CellDesc::Mine => n_mines += 1,
+            CellDesc::Free(_) => ()
+        }
+    }
+    if n_unknowns == 0 {
+        return vec![];
+    }
+    let mut updated = Vec::with_capacity(NEIGH.len());
+    /* Since known mines are excluded from danger score,
+       estimate is set to danger evenly distributed over neigbour unknowns. */
+    let p = (danger - n_mines) as f32 / n_unknowns as f32;
+    for (i, neigh_d) in NEIGH.iter().enumerate() {
+        let neigh_pos = (offset(at.0, neigh_d.0), offset(at.1, neigh_d.1));
+        let c = &mut scratchpad[neigh_pos];
+        match c {
+            CellDesc::Unknown => {
+                *c = CellDesc::Estimate([0f32; NEIGH.len()])
+            },
+            _ => ()
+        }
+        match c {
+            CellDesc::Estimate(mut ps) => {
+                ps[i] = p;
+                updated.push(neigh_pos);
+            },
+            _ => ()
+        }
+    }
+    return updated;
 }
 
 #[cfg(test)]
