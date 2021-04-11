@@ -331,6 +331,7 @@ fn main() {
                     },
                     Action::Probe(pos) => {
                         let danger = mines.probe(*pos);
+                        assert!(!is_mine(danger));
                         scratchpad.cells[*pos] = CellDesc::Free(danger);
                         edge.remove(pos);
                     }
@@ -436,7 +437,7 @@ fn update_estimates(
     for (i, neigh_d) in NEIGH.iter().enumerate() {
         let neigh_pos = (offset(at.0, neigh_d.0), offset(at.1, neigh_d.1));
         if !field.is_active(&neigh_pos) {
-            continue // XXX Added margin to avoid checks, and still needing them
+            continue // XXX Added margin to avoid checks, and still needing them?
         }
         let c = &mut scratchpad.cells[neigh_pos];
         if p == 0f32 {
