@@ -1,7 +1,6 @@
 use std::collections::HashSet;
 use std::fmt;
-use std::io::{self, BufRead};
-// , stdout, Write
+// use std::io::{self, BufRead};
 use std::ops::Range;
 
 use ansi_escapes::{EraseLine, ClearScreen, CursorHide, CursorShow, CursorTo};
@@ -175,7 +174,7 @@ impl fmt::Display for Board {
 #[derive(Clone)]
 enum CellDesc {
     Unknown,
-    // TODO Actually we can have only 44 distinct ratios, no need in full float functionality.
+    // TODO (improvement) Actually we can have only 44 distinct ratios, no need in full float functionality.
     Estimate([f32; NEIGH.len()]),
     ShouldFree,
     // Estimated to be free (should become Free(0) after probe)
@@ -221,7 +220,7 @@ impl fmt::Display for CellDesc {
                            Colour::RGB(c, c, c).paint("%")
                        }
                    },
-                   CellDesc::ShouldFree => Colour::RGB(0, 0x5f, 0x5f).paint("0"),
+                   CellDesc::ShouldFree => Colour::RGB(0x5f, 0x5f, 0x5f).paint("0"),
                    CellDesc::Free(0) => Colour::Black.paint(" "),
                    CellDesc::Free(n) => Colour::Cyan.paint(format!("{}", n)),
                    _ => Colour::Black.paint("#")
@@ -249,7 +248,7 @@ impl fmt::Display for ScratchPad {
 }
 
 fn main() {
-    let n_rows: usize = 40;
+    let n_rows: usize = 50;
     let n_cols: usize = 100;
     assert!(n_rows >= MARGIN);
     assert!(n_cols >= MARGIN);
@@ -257,7 +256,7 @@ fn main() {
     let mines: Field = {
         let mut m = Field::new(n_rows, n_cols);
         let mut rng = rand::thread_rng();
-        m.random_fill(&mut rng, 0.05);
+        m.random_fill(&mut rng, 0.1);
         // m.mines[(3, 3)] = true;
         // m.n_mines = 1;
         m
@@ -270,22 +269,13 @@ fn main() {
     let mut uncleared = mines.active_ranges.0.len() * mines.active_ranges.1.len();
     let mut edge: HashSet<Pos> = HashSet::with_capacity(200);
 
-    let stdin = io::stdin();
-    let mut user_input = stdin.lock().lines();
+    // let stdin = io::stdin();
+    // let mut user_input = stdin.lock().lines();
 
     print!("{}", ClearScreen);
     'game: loop {
         step += 1;
         print!("{}{}", CursorHide, CursorTo::TopLeft);
-
-        // for c in 0..255 {
-        //     print!("{}", Colour::Fixed(c).paint("#"));
-        // }
-        // println!();
-        // for c in 0..255 {
-        //     print!("{}", Colour::RGB(c, c, c).paint("#"));
-        // }
-        // println!();
 
         println!("Step {}, uncleared {}", step, uncleared);
         // println!("{}", &mines);
@@ -350,25 +340,25 @@ fn main() {
                     board.cells[*pos] = CellState::Marked;
                     step_updates.insert(*pos);
                 } else if danger == 0f32 {
-                    pick = Some((pos.to_owned(), 0f32)); //  TODO (improvement) Implement Copy for Pos
+                    pick = Some((pos, 0f32));
                     step_updates.insert(*pos);
                     break 'edge_scan;
                 } else {
                     match pick {
                         Some((_, pick_danger)) =>
                             if danger < pick_danger {
-                                pick = Some((pos.to_owned(), danger))
+                                pick = Some((pos, danger))
                             },
                         None =>
-                            pick = Some((pos.to_owned(), danger))
+                            pick = Some((pos, danger))
                     }
                 }
             }
             match pick {
                 Some((pos, _)) => {
                     assert!(mines.is_active(&pos));
-                    probe_here = pos;
-                    step_updates.insert(pos.to_owned());
+                    probe_here = *pos;
+                    step_updates.insert(*pos);
                 },
                 None => {
                     println!("Scratch\n{}", &scratchpad); // DEBUG
