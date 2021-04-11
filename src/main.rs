@@ -214,7 +214,8 @@ impl fmt::Display for CellDesc {
                match self {
                    CellDesc::Mine => Colour::Green.paint("@"),
                    CellDesc::Estimate(_xs) => Colour::RGB(100, 100, 100).paint("%"),
-                   CellDesc::ShouldFree => Colour::RGB(200, 200, 200).paint("0"),
+                   CellDesc::ShouldFree => Colour::RGB(100, 100, 100).paint("0"),
+                   CellDesc::Free(0) => Colour::Black.paint(" "),
                    CellDesc::Free(n) => Colour::Cyan.paint(format!("{}", n)),
                    _ => Colour::Black.paint("#")
                })
@@ -247,11 +248,12 @@ fn main() {
     assert!(n_rows >= MARGIN);
     assert!(n_cols >= MARGIN);
 
-    let mines: Field = Field::random_new(&mut rng, n_rows, n_cols, 0.2);
+    let mines: Field = Field::random_new(&mut rng, n_rows, n_cols, 0.1);
     let mut board: Board = Board::new(n_rows, n_cols);
+    let mut step = 0;
 
     let mut scratchpad = ScratchPad::new(n_rows, n_cols);
-    let mut probe_here = (MARGIN, MARGIN); // TODO API with the algorithm Vec::with_capacity(100)
+    let mut probe_here = (MARGIN, MARGIN); // TODO API with the algorithm?
     let mut mines_remaining = mines.n_mines;
     let mut edge: HashSet<Pos> = HashSet::with_capacity(200);
 
@@ -259,12 +261,14 @@ fn main() {
     let mut user_input = stdin.lock().lines();
 
     loop {
+        step += 1;
         print!("{}{}{}", CursorHide, ClearScreen, CursorTo::TopLeft);
 
-        println!("{}", &mines);
-        println!("Mines {:?}", &mines); // DEBUG
+        println!("Step {}\n{}", step, &mines);
+        // println!("Mines {:?}", &mines); // DEBUG
         println!("\n-------");
         println!("{}", &board);
+        println!("\n------- left: {}", mines_remaining);
         // println!("Board {:?}", &board); // DEBUG
 
         println!("{}", CursorShow);
@@ -282,7 +286,6 @@ fn main() {
         let danger = mines.probe(probe_here);
 
         println!("Danger {:?}", &danger); // DEBUG
-        user_input.next().unwrap().unwrap(); // DEBUG
         if is_mine(danger) {
             println!("Failed. Probe at {:?}", probe_here);
             break;
@@ -290,9 +293,12 @@ fn main() {
         board.cells[probe_here] = CellState::Free;
         {
             scratchpad.cells[probe_here] = CellDesc::Free(danger);
+            println!("Scratch 0\n{}", &scratchpad); // DEBUG
+            println!("Edge 0 {:?}", &edge); // DEBUG
+
             edge.retain(|pos| match scratchpad.cells[*pos] { // Slow, can be updated incrementally instead
-                CellDesc::Estimate(_) => true,
-                _ => false
+                CellDesc::ShouldFree | CellDesc::Estimate(_) => true,
+                _ => false // Remove Mine, Free
             });
 
             /* In a GPU-like environment we could recalculate every estimate on the board every time.
@@ -308,12 +314,15 @@ fn main() {
                     }
                 }
             }
+            println!("Scratch a\n{}", &scratchpad); // DEBUG
+            println!("Edge a {:?}", &edge); // DEBUG
 
             /* TODO Need some deque+priority queue (or maybe 2 priority queues with opposite ordering).
                Consider https://lib.rs/crates/priority-queue
                Doing O(N) scan for now. */
+            let mut step_updates : HashSet<Pos> = HashSet::with_capacity(NEIGH.len());
             let mut pick = None;
-            for pos in &edge {
+            'edge_scan: for pos in &edge {
                 let cell_desc = &scratchpad.cells[*pos];
                 assert!(match cell_desc {
                     CellDesc::ShouldFree | CellDesc::Estimate(_) => true,
@@ -321,13 +330,15 @@ fn main() {
                 }, "Only estimates should be on the edge.");
 
                 let danger = cell_desc.danger();
-                if danger > 0.999f32 {
+                if danger == 1f32 {
                     scratchpad.cells[*pos] = CellDesc::Mine;
                     mines_remaining -= 1;
                     board.cells[*pos] = CellState::Marked;
+                    step_updates.insert(*pos);
                 } else if danger == 0f32 {
                     pick = Some((pos.to_owned(), 0f32)); //  TODO (improvement) Implement Copy for Pos
-                    break;
+                    step_updates.insert(*pos);
+                    break 'edge_scan;
                 } else {
                     match pick {
                         Some((_, pick_danger)) =>
@@ -341,12 +352,19 @@ fn main() {
             }
             match pick {
                 Some((pos, _)) => {
+                    assert!(mines.is_active(&pos));
                     probe_here = pos;
-                    assert!(mines.is_active(&probe_here));
+                    step_updates.insert(pos.to_owned());
                 },
-                None => panic!("No position selected.")
+                None => {
+                    println!("Scratch\n{}", &scratchpad); // DEBUG
+                    println!("Edge {:?}", &edge); // DEBUG
+                    panic!("No position selected.")
+                }
             }
+            edge.difference(&step_updates);
         }
+        user_input.next().unwrap().unwrap(); // DEBUG
     }
 }
 
@@ -371,20 +389,23 @@ fn update_estimates(
             CellDesc::ShouldFree | CellDesc::Free(_) => ()
         }
     }
-    if n_unknowns == 0 {
-        return
-    }
     /* Since known mines are excluded from danger score,
        estimate is set to danger evenly distributed over neighbour unknowns. */
-    let p = if danger == 0u8 { 0f32 } else {
+    let p = if danger == 0u8 { 0f32 } else if n_unknowns == 0 {
+        return
+    } else {
         assert!(danger >= n_mines);
         (danger - n_mines) as f32 / n_unknowns as f32
     };
+    println!("at {:?} p={}", &at, &p); // DEBUG
     for (i, neigh_d) in NEIGH.iter().enumerate() {
         let neigh_pos = (offset(at.0, neigh_d.0), offset(at.1, neigh_d.1));
         let c = &mut scratchpad.cells[neigh_pos];
         if p == 0f32 {
-            *c = CellDesc::ShouldFree
+            *c = CellDesc::ShouldFree;
+            if field.is_active(&neigh_pos) {
+                edge.insert(neigh_pos);
+            }
         } else {
             match c { // Setting default
                 CellDesc::Unknown => {
