@@ -220,7 +220,7 @@ impl fmt::Display for CellDesc {
                            Colour::RGB(c, c, c).paint("%")
                        }
                    },
-                   CellDesc::ShouldFree => Colour::RGB(0x5f, 0x5f, 0x5f).paint("0"),
+                   CellDesc::ShouldFree => Colour::RGB(50, 50, 50).paint("0"),
                    CellDesc::Free(0) => Colour::Black.paint(" "),
                    CellDesc::Free(n) => Colour::Cyan.paint(format!("{}", n)),
                    _ => Colour::Black.paint("#")
@@ -240,6 +240,14 @@ impl ScratchPad {
         }
     }
 }
+
+#[derive(Debug)]
+enum Action {
+    Mark(Pos),
+    Probe(Pos),
+}
+
+type Actions = Vec<Action>;
 
 impl fmt::Display for ScratchPad {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -262,12 +270,13 @@ fn main() {
         m
     };
     let mut board: Board = Board::new(n_rows, n_cols);
+    let mut uncleared = mines.active_ranges.0.len() * mines.active_ranges.1.len();
     let mut step = 0;
 
     let mut scratchpad = ScratchPad::new(n_rows, n_cols);
-    let mut probe_here = (MARGIN, MARGIN); // TODO (refactoring) Have an API with the algorithm.
-    let mut uncleared = mines.active_ranges.0.len() * mines.active_ranges.1.len();
     let mut edge: HashSet<Pos> = HashSet::with_capacity(200);
+    let mut actions = Actions::with_capacity(100); // TODO (refactoring) Have a batch probe API with the algorithm.
+    actions.push(Action::Probe((MARGIN, MARGIN)));
 
     // let stdin = io::stdin();
     // let mut user_input = stdin.lock().lines();
@@ -287,16 +296,26 @@ fn main() {
         // println!("Edge {:?}", &edge); // DEBUG
         // stdout().write(format!("{}"));
         println!("Scratch\n{}", &scratchpad); // DEBUG
-        println!("{}Probing {:?}", EraseLine, &probe_here); // DEBUG
+        // println!("{}Actions {:?}", EraseLine, &actions); // DEBUG
 
-        let danger = mines.probe(probe_here);
-        println!("Danger {:?}", &danger); // DEBUG
-        if is_mine(danger) {
-            println!("Failed, uncleared {}. Probe at {:?}", uncleared, probe_here);
-            break;
+        for action in &actions {
+            match action {
+                Action::Mark(pos) => {
+                    assert_eq!(board.cells[*pos], CellState::Unknown);
+                    board.cells[*pos] = CellState::Marked
+                },
+                Action::Probe(pos) => {
+                    assert_eq!(board.cells[*pos], CellState::Unknown);
+                    if mines.mines[*pos] {
+                        println!("Failed, uncleared {}. Probe at {:?}", uncleared, pos);
+                        break 'game;
+                    }
+                    board.cells[*pos] = CellState::Free;
+                }
+            }
+            uncleared -= 1;
         }
-        board.cells[probe_here] = CellState::Free;
-        uncleared -= 1;
+
         if uncleared == 0 {
             println!("{}", &board);
             println!("Complete.");
@@ -304,75 +323,81 @@ fn main() {
         }
         println!("{}", CursorShow);
         {
-            scratchpad.cells[probe_here] = CellDesc::Free(danger);
-            edge.retain(|pos| match scratchpad.cells[*pos] { // Slow, can be updated incrementally instead
-                CellDesc::ShouldFree | CellDesc::Estimate(_) => true,
-                _ => false // Remove Mine, Free
-            });
+            for action in &actions {
+                match action {
+                    Action::Mark(pos) => {
+                        scratchpad.cells[*pos] = CellDesc::Mine;
+                        edge.remove(pos);
+                    },
+                    Action::Probe(pos) => {
+                        let danger = mines.probe(*pos);
+                        scratchpad.cells[*pos] = CellDesc::Free(danger);
+                        edge.remove(pos);
+                    }
+                }
+            }
+
             /* In a GPU-like environment we could recalculate every estimate on the board every time.
                On a CPU one perhaps should be selective but it gets complicated.
                A compromise could be to update whole edge every time. */
-            for neigh_d in &PATCH {
-                let cell_pos = (offset(probe_here.0, neigh_d.0), offset(probe_here.1, neigh_d.1));
-                match scratchpad.cells[cell_pos] {
-                    CellDesc::Free(danger) =>
-                        update_estimates(&mines, &mut scratchpad, &cell_pos, danger, &mut edge),
-                    _ => ()
+            for action in actions.drain(..) {
+                let action_pos = match action {
+                    Action::Mark(pos) | Action::Probe(pos) => pos
+                };
+                for neigh_d in &PATCH {
+                    let cell_pos = (offset(action_pos.0, neigh_d.0), offset(action_pos.1, neigh_d.1));
+                    match scratchpad.cells[cell_pos] {
+                        CellDesc::Free(danger) =>
+                            update_estimates(&mines, &mut scratchpad, &cell_pos, danger, &mut edge),
+                        _ => ()
+                    }
                 }
             }
 
             /* TODO Need some deque+priority queue (or maybe 2 priority queues with opposite ordering).
                Consider https://lib.rs/crates/priority-queue
                Doing O(N) scan for now. */
-            let mut step_updates: HashSet<Pos> = HashSet::with_capacity(NEIGH.len());
-            let mut pick = None;
-            'edge_scan: for pos in &edge {
+            let mut risky_pick = None;
+            for pos in &edge {
                 let cell_desc = &scratchpad.cells[*pos];
                 assert!(match cell_desc {
                     CellDesc::ShouldFree | CellDesc::Estimate(_) => true,
-                    _ => false // Can be lifted for Unknonws with a better implementation.
+                    _ => false // Can be lifted for Unknonws with a better implementation (use "mines remaining / uncleared").
                 }, "Only estimates should be on the edge.");
 
-                let danger = cell_desc.danger();
+                let danger = if mines.is_active(pos) { cell_desc.danger() } else { 0. };
                 if danger == 1f32 {
-                    scratchpad.cells[*pos] = CellDesc::Mine;
-                    uncleared -= 1;
-                    board.cells[*pos] = CellState::Marked;
-                    step_updates.insert(*pos);
+                    actions.push(Action::Mark(*pos));
                 } else if danger == 0f32 {
-                    pick = Some((pos, 0f32));
-                    step_updates.insert(*pos);
-                    break 'edge_scan;
+                    actions.push(Action::Probe(*pos));
                 } else {
-                    match pick {
+                    match risky_pick {
                         Some((_, pick_danger)) =>
                             if danger < pick_danger {
-                                pick = Some((pos, danger))
+                                risky_pick = Some((pos, danger))
                             },
                         None =>
-                            pick = Some((pos, danger))
+                            risky_pick = Some((pos, danger))
                     }
                 }
             }
-            match pick {
-                Some((pos, _)) => {
-                    assert!(mines.is_active(&pos));
-                    probe_here = *pos;
-                    step_updates.insert(*pos);
-                },
-                None => {
-                    println!("Scratch\n{}", &scratchpad); // DEBUG
-                    println!("Edge {:?}", &edge); // DEBUG
-                    if uncleared == 0 {
-                        println!("{}", &board);
-                        println!("Complete.");
-                        break 'game;
+            if actions.is_empty() {
+                match risky_pick {
+                    Some((pos, _)) => {
+                        assert!(mines.is_active(&pos));
+                        actions.push(Action::Probe(*pos));
+                    },
+                    None => {
+                        println!("Scratch\n{}", &scratchpad); // DEBUG
+                        println!("Edge {:?}", &edge); // DEBUG
+                        if uncleared == 0 {
+                            println!("{}", &board);
+                            println!("Complete.");
+                            break 'game;
+                        }
+                        panic!("No position selected.")
                     }
-                    panic!("No position selected.")
                 }
-            }
-            for pos in &step_updates {
-                edge.remove(pos);
             }
         }
         // user_input.next().unwrap().unwrap(); // DEBUG
@@ -403,15 +428,16 @@ fn update_estimates(
     }
     /* Since known mines are excluded from danger score,
        estimate is set to danger evenly distributed over neighbour unknowns. */
-    let p = if danger == 0u8 { 0f32 } else if n_unknowns == 0 {
-        return
-    } else {
+    let p = if danger == 0u8 || n_unknowns == 0 { 0f32 } else {
         assert!(danger >= n_mines);
         (danger - n_mines) as f32 / n_unknowns as f32
     };
     // println!("at {:?} p={}", &at, &p); // DEBUG
     for (i, neigh_d) in NEIGH.iter().enumerate() {
         let neigh_pos = (offset(at.0, neigh_d.0), offset(at.1, neigh_d.1));
+        if !field.is_active(&neigh_pos) {
+            continue // XXX Added margin to avoid checks, and still needing them
+        }
         let c = &mut scratchpad.cells[neigh_pos];
         if p == 0f32 {
             match *c {
