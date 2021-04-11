@@ -4,7 +4,7 @@ use std::io::{self, BufRead};
 // , stdout, Write
 use std::ops::Range;
 
-use ansi_escapes::{ClearScreen, CursorHide, CursorShow, CursorTo};
+use ansi_escapes::{EraseLine, ClearScreen, CursorHide, CursorShow, CursorTo};
 use ansi_term::Colour;
 use ndarray::{Array, Ix2};
 use rand::prelude::ThreadRng;
@@ -59,28 +59,27 @@ fn active_ranges(shape: &[usize]) -> (Range<usize>, Range<usize>) {
 }
 
 impl Field {
-    fn random_new(rng: &mut ThreadRng,
-                  n_rows: usize,
-                  n_cols: usize,
-                  fill_frac: f32) -> Field {
-        assert!(0.0 <= fill_frac && fill_frac <= 1.0);
-        let mut cells = Array::from_elem(Ix2(n_rows, n_cols), false);
-        let mut n_mines = 0;
-        let ranges = active_ranges(cells.shape());
-        let (rows, cols) = &ranges;
-        for i in rows.to_owned() {
-            for j in cols.clone() {
-                if rng.gen::<f32>() < fill_frac {
-                    cells[[i, j]] = true;
-                    n_mines += 1;
-                }
-            }
-        }
+    fn new(n_rows: usize, n_cols: usize) -> Field {
+        let cells = Array::from_elem(Ix2(n_rows, n_cols), false);
+        let ranges = active_ranges(&cells.shape());
         return Field {
             mines: cells,
             active_ranges: ranges,
-            n_mines,
+            n_mines: 0,
         };
+    }
+
+    fn random_fill(&mut self, rng: &mut ThreadRng, fill_frac: f32) {
+        assert!(0.0 <= fill_frac && fill_frac <= 1.0);
+        let (rows, cols) = &self.active_ranges;
+        for i in rows.to_owned() {
+            for j in cols.clone() {
+                if rng.gen::<f32>() < fill_frac {
+                    self.mines[[i, j]] = true;
+                    self.n_mines += 1;
+                }
+            }
+        }
     }
 
     fn probe(&self, pos: (usize, usize)) -> u8 {
@@ -184,11 +183,11 @@ enum CellDesc {
     Mine,
 }
 
-fn max(xs: [f32; NEIGH.len()]) -> f32 {
+fn max(xs: &[f32; NEIGH.len()]) -> f32 {
     /* No Ord for f32 so default max won't work.
        Our p values are never Inf or NaN and array is not empty. */
     let mut result = xs[0];
-    for x in &xs {
+    for x in xs {
         if *x > result {
             result = *x;
         }
@@ -200,7 +199,7 @@ impl CellDesc {
     fn danger(self: &CellDesc) -> f32 {
         match self {
             CellDesc::Mine => 1f32,
-            CellDesc::Estimate(ps) => max(*ps),
+            CellDesc::Estimate(ps) => max(ps),
             CellDesc::ShouldFree | CellDesc::Free(_) => 0f32,
             // Unknown can actually be estimated given total unknown count and remaining mines count.
             CellDesc::Unknown => panic!("Unreachable"),
@@ -213,8 +212,16 @@ impl fmt::Display for CellDesc {
         write!(f, "{}",
                match self {
                    CellDesc::Mine => Colour::Green.paint("@"),
-                   CellDesc::Estimate(_xs) => Colour::RGB(100, 100, 100).paint("%"),
-                   CellDesc::ShouldFree => Colour::RGB(100, 100, 100).paint("0"),
+                   CellDesc::Estimate(xs) => {
+                       let m = max(xs);
+                       if m == 1f32 {
+                           Colour::Yellow.paint("%")
+                       } else {
+                           let c = (255 as f32 * m) as u8;
+                           Colour::RGB(c, c, c).paint("%")
+                       }
+                   },
+                   CellDesc::ShouldFree => Colour::Black.paint("0"),
                    CellDesc::Free(0) => Colour::Black.paint(" "),
                    CellDesc::Free(n) => Colour::Cyan.paint(format!("{}", n)),
                    _ => Colour::Black.paint("#")
@@ -242,85 +249,92 @@ impl fmt::Display for ScratchPad {
 }
 
 fn main() {
-    let mut rng = rand::thread_rng();
-    let n_rows: usize = 10;
-    let n_cols: usize = 10;
+    let n_rows: usize = 40;
+    let n_cols: usize = 100;
     assert!(n_rows >= MARGIN);
     assert!(n_cols >= MARGIN);
 
-    let mines: Field = Field::random_new(&mut rng, n_rows, n_cols, 0.1);
+    let mines: Field = {
+        let mut m = Field::new(n_rows, n_cols);
+        let mut rng = rand::thread_rng();
+        m.random_fill(&mut rng, 0.05);
+        // m.mines[(3, 3)] = true;
+        // m.n_mines = 1;
+        m
+    };
     let mut board: Board = Board::new(n_rows, n_cols);
     let mut step = 0;
 
     let mut scratchpad = ScratchPad::new(n_rows, n_cols);
-    let mut probe_here = (MARGIN, MARGIN); // TODO API with the algorithm?
-    let mut mines_remaining = mines.n_mines;
+    let mut probe_here = (MARGIN, MARGIN); // TODO (refactoring) Have an API with the algorithm.
+    let mut uncleared = mines.active_ranges.0.len() * mines.active_ranges.1.len();
     let mut edge: HashSet<Pos> = HashSet::with_capacity(200);
 
     let stdin = io::stdin();
     let mut user_input = stdin.lock().lines();
 
-    loop {
+    print!("{}", ClearScreen);
+    'game: loop {
         step += 1;
-        print!("{}{}{}", CursorHide, ClearScreen, CursorTo::TopLeft);
+        print!("{}{}", CursorHide, CursorTo::TopLeft);
 
-        println!("Step {}\n{}", step, &mines);
+        // for c in 0..255 {
+        //     print!("{}", Colour::Fixed(c).paint("#"));
+        // }
+        // println!();
+        // for c in 0..255 {
+        //     print!("{}", Colour::RGB(c, c, c).paint("#"));
+        // }
+        // println!();
+
+        println!("Step {}, uncleared {}", step, uncleared);
+        // println!("{}", &mines);
         // println!("Mines {:?}", &mines); // DEBUG
-        println!("\n-------");
-        println!("{}", &board);
-        println!("\n------- left: {}", mines_remaining);
+        // println!("\n-------");
+        // println!("{}", &board);
         // println!("Board {:?}", &board); // DEBUG
 
-        println!("{}", CursorShow);
-
-        if mines_remaining == 0 {
-            println!("Complete.");
-            break;
-        }
-
-        println!("Edge {:?}", &edge); // DEBUG
+        // println!("Edge {:?}", &edge); // DEBUG
         // stdout().write(format!("{}"));
         println!("Scratch\n{}", &scratchpad); // DEBUG
-        println!("Probing {:?}", &probe_here); // DEBUG
+        println!("{}Probing {:?}", EraseLine, &probe_here); // DEBUG
 
         let danger = mines.probe(probe_here);
-
         println!("Danger {:?}", &danger); // DEBUG
         if is_mine(danger) {
-            println!("Failed. Probe at {:?}", probe_here);
+            println!("Failed, uncleared {}. Probe at {:?}", uncleared, probe_here);
             break;
         }
         board.cells[probe_here] = CellState::Free;
+        uncleared -= 1;
+        if uncleared == 0 {
+            println!("{}", &board);
+            println!("Complete.");
+            break;
+        }
+        println!("{}", CursorShow);
         {
             scratchpad.cells[probe_here] = CellDesc::Free(danger);
-            println!("Scratch 0\n{}", &scratchpad); // DEBUG
-            println!("Edge 0 {:?}", &edge); // DEBUG
-
             edge.retain(|pos| match scratchpad.cells[*pos] { // Slow, can be updated incrementally instead
                 CellDesc::ShouldFree | CellDesc::Estimate(_) => true,
                 _ => false // Remove Mine, Free
             });
-
             /* In a GPU-like environment we could recalculate every estimate on the board every time.
                On a CPU one perhaps should be selective but it gets complicated.
                A compromise could be to update whole edge every time. */
             for neigh_d in &PATCH {
                 let cell_pos = (offset(probe_here.0, neigh_d.0), offset(probe_here.1, neigh_d.1));
-                if mines.is_active(&cell_pos) {
-                    match scratchpad.cells[cell_pos] {
-                        CellDesc::Free(danger) =>
-                            update_estimates(&mines, &mut scratchpad, &cell_pos, danger, &mut edge),
-                        _ => ()
-                    }
+                match scratchpad.cells[cell_pos] {
+                    CellDesc::Free(danger) =>
+                        update_estimates(&mines, &mut scratchpad, &cell_pos, danger, &mut edge),
+                    _ => ()
                 }
             }
-            println!("Scratch a\n{}", &scratchpad); // DEBUG
-            println!("Edge a {:?}", &edge); // DEBUG
 
             /* TODO Need some deque+priority queue (or maybe 2 priority queues with opposite ordering).
                Consider https://lib.rs/crates/priority-queue
                Doing O(N) scan for now. */
-            let mut step_updates : HashSet<Pos> = HashSet::with_capacity(NEIGH.len());
+            let mut step_updates: HashSet<Pos> = HashSet::with_capacity(NEIGH.len());
             let mut pick = None;
             'edge_scan: for pos in &edge {
                 let cell_desc = &scratchpad.cells[*pos];
@@ -332,7 +346,7 @@ fn main() {
                 let danger = cell_desc.danger();
                 if danger == 1f32 {
                     scratchpad.cells[*pos] = CellDesc::Mine;
-                    mines_remaining -= 1;
+                    uncleared -= 1;
                     board.cells[*pos] = CellState::Marked;
                     step_updates.insert(*pos);
                 } else if danger == 0f32 {
@@ -359,12 +373,19 @@ fn main() {
                 None => {
                     println!("Scratch\n{}", &scratchpad); // DEBUG
                     println!("Edge {:?}", &edge); // DEBUG
+                    if uncleared == 0 {
+                        println!("{}", &board);
+                        println!("Complete.");
+                        break 'game;
+                    }
                     panic!("No position selected.")
                 }
             }
-            edge.difference(&step_updates);
+            for pos in &step_updates {
+                edge.remove(pos);
+            }
         }
-        user_input.next().unwrap().unwrap(); // DEBUG
+        // user_input.next().unwrap().unwrap(); // DEBUG
     }
 }
 
@@ -386,7 +407,7 @@ fn update_estimates(
         match scratchpad.cells[neigh_pos] {
             CellDesc::Unknown | CellDesc::Estimate(_) => n_unknowns += 1,
             CellDesc::Mine => n_mines += 1,
-            CellDesc::ShouldFree | CellDesc::Free(_) => ()
+            CellDesc::Free(_) | CellDesc::ShouldFree => ()
         }
     }
     /* Since known mines are excluded from danger score,
@@ -397,14 +418,19 @@ fn update_estimates(
         assert!(danger >= n_mines);
         (danger - n_mines) as f32 / n_unknowns as f32
     };
-    println!("at {:?} p={}", &at, &p); // DEBUG
+    // println!("at {:?} p={}", &at, &p); // DEBUG
     for (i, neigh_d) in NEIGH.iter().enumerate() {
         let neigh_pos = (offset(at.0, neigh_d.0), offset(at.1, neigh_d.1));
         let c = &mut scratchpad.cells[neigh_pos];
         if p == 0f32 {
-            *c = CellDesc::ShouldFree;
-            if field.is_active(&neigh_pos) {
-                edge.insert(neigh_pos);
+            match *c {
+                CellDesc::Unknown | CellDesc::Estimate(_) => {
+                    *c = CellDesc::ShouldFree;
+                    if field.is_active(&neigh_pos) {
+                        edge.insert(neigh_pos);
+                    }
+                },
+                _ => ()
             }
         } else {
             match c { // Setting default
