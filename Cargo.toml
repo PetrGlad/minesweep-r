@@ -8,5 +8,5 @@ edition = "2018"
 [dependencies]
 rand = "0.7"
 ansi_term = "0.12.1"
-ansi-escapes = "0.1.0"
+ansi-escapes = "0.1.1"
 ndarray = "0.14.0"

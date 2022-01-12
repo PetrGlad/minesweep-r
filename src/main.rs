@@ -9,8 +9,6 @@ use ndarray::{Array, Ix2};
 use rand::prelude::ThreadRng;
 use rand::Rng;
 
-/* TODO: ansi_escapes is unsupported, consider switching
-   See https://github.com/LinusU/rust-ansi-escapes/pull/1 */
 type Coord = usize;
 type Pos = (Coord, Coord);
 
